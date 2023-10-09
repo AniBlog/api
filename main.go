@@ -8,19 +8,44 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
-type BlogPost struct {
-	Id    int64  `json:"id"`
-	Title string `json:"title"`
+type Site struct {
+	Id   int64  `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+type Post struct {
+	Site          Site   `json:"site"`
+	Id            int64  `json:"id"`
+	Title         string `json:"title"`
+	Url           string `json:"url"`
+	Summary       string `json:"summary"`
+	DatePublished string `json:"date"`
+	ImageUrl      string `json:"image"`
 }
 
 func GetPostById(c *gin.Context) {
-	//id := c.Param("id")
-	post := BlogPost{
-		Id:    1,
-		Title: "Test",
+	post := Post{
+		Site: Site{
+			Id:   1,
+			Name: "Bateszi Anime Blog",
+			Type: "Aniblog",
+		},
+		Id:            1,
+		Title:         "The End of Vinland Saga: An Inevitable Tragedy",
+		Url:           "https://bateszi.me/2020/01/03/the-end-of-vinland-saga-an-inevitable-tragedy/",
+		Summary:       "Pellentesque elit ullamcorper dignissim cras tincidunt lobortis feugiat vivamus at augue eget arcu dictum varius duis at consectetur lorem donec massa sapien faucibus et molestie",
+		DatePublished: time.Now().Format(time.RFC3339),
+		ImageUrl:      "https://cdn.aniblogtracker.com/live/20201231/1609434169.122.2989.jpg",
 	}
+	//id := c.Param("id")
+	//post := BlogPost{
+	//	Id:    1,
+	//	Title: "Test",
+	//}
 	c.IndentedJSON(http.StatusOK, post)
 }
 
