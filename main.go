@@ -18,13 +18,17 @@ type Site struct {
 }
 
 type Post struct {
-	Site          Site   `json:"site"`
-	Id            int64  `json:"id"`
-	Title         string `json:"title"`
-	Url           string `json:"url"`
-	Summary       string `json:"summary"`
-	DatePublished string `json:"date"`
-	ImageUrl      string `json:"image"`
+	Site          Site     `json:"site"`
+	Id            int64    `json:"id"`
+	Title         string   `json:"title"`
+	Url           string   `json:"url"`
+	Summary       string   `json:"summary"`
+	DatePublished string   `json:"date"`
+	ImageUrl      string   `json:"image"`
+	Tags          []string `json:"tags"`
+}
+
+func GetPosts(c *gin.Context) {
 }
 
 func GetPostById(c *gin.Context) {
@@ -40,6 +44,7 @@ func GetPostById(c *gin.Context) {
 		Summary:       "Pellentesque elit ullamcorper dignissim cras tincidunt lobortis feugiat vivamus at augue eget arcu dictum varius duis at consectetur lorem donec massa sapien faucibus et molestie",
 		DatePublished: time.Now().Format(time.RFC3339),
 		ImageUrl:      "https://cdn.aniblogtracker.com/live/20201231/1609434169.122.2989.jpg",
+		Tags:          []string{"g", "h", "i"},
 	}
 	//id := c.Param("id")
 	//post := BlogPost{
@@ -68,8 +73,14 @@ func main() {
 	fmt.Println("Connected!")
 	router := gin.Default()
 	apiV1 := router.Group("/v1")
+	apiV1.GET("/posts", GetPosts)
 	apiV1.GET("/post/:id", GetPostById)
-	err = router.Run("localhost:1234")
+	apiAddress := fmt.Sprintf(
+		"%s:%s",
+		os.Getenv("API_HOST"),
+		os.Getenv("API_PORT"),
+	)
+	err = router.Run(apiAddress)
 	if err != nil {
 		log.Fatal(err)
 	}
