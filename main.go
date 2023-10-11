@@ -5,53 +5,58 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
-	"log"
+	"math"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 )
 
-type Site struct {
-	Id   int64  `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
+type TrendingPosts struct {
+	Posts []TrendingPost `json:"posts"`
 }
 
-type Post struct {
-	Site          Site     `json:"site"`
-	Id            int64    `json:"id"`
-	Title         string   `json:"title"`
-	Url           string   `json:"url"`
-	Summary       string   `json:"summary"`
-	DatePublished string   `json:"date"`
-	ImageUrl      string   `json:"image"`
-	Tags          []string `json:"tags"`
+type TrendingPost struct {
+	PostId        int64 `json:"post_id"`
+	views         int64
+	publishedDate time.Time
+	TrendingScore float64 `json:"score"`
 }
 
-func GetPosts(c *gin.Context) {
-}
+func (receiver *TrendingPosts) algo() {
+	const decayFactor = 0.9986
 
-func GetPostById(c *gin.Context) {
-	post := Post{
-		Site: Site{
-			Id:   1,
-			Name: "Bateszi Anime Blog",
-			Type: "Aniblog",
-		},
-		Id:            1,
-		Title:         "The End of Vinland Saga: An Inevitable Tragedy",
-		Url:           "https://bateszi.me/2020/01/03/the-end-of-vinland-saga-an-inevitable-tragedy/",
-		Summary:       "Pellentesque elit ullamcorper dignissim cras tincidunt lobortis feugiat vivamus at augue eget arcu dictum varius duis at consectetur lorem donec massa sapien faucibus et molestie",
-		DatePublished: time.Now().Format(time.RFC3339),
-		ImageUrl:      "https://cdn.aniblogtracker.com/live/20201231/1609434169.122.2989.jpg",
-		Tags:          []string{"g", "h", "i"},
+	for i := range receiver.Posts {
+		postAgeInDays := float64(time.Now().Unix()-receiver.Posts[i].publishedDate.Unix()) / (24 * 60 * 60)
+		multiplier := math.Pow(decayFactor, postAgeInDays)
+		receiver.Posts[i].TrendingScore = float64(receiver.Posts[i].views) * multiplier
 	}
-	//id := c.Param("id")
-	//post := BlogPost{
-	//	Id:    1,
-	//	Title: "Test",
-	//}
-	c.IndentedJSON(http.StatusOK, post)
+
+	sort.Slice(receiver.Posts, func(i, j int) bool {
+		return receiver.Posts[j].TrendingScore < receiver.Posts[i].TrendingScore
+	})
+}
+
+func ApiV1TrendingPosts(c *gin.Context) {
+	db, _ := c.MustGet("db").(*sql.DB)
+	rows, _ := db.Query("SELECT post_views.fk_post_id, COUNT(*) as views, posts.pub_date " +
+		"FROM post_views, posts " +
+		"WHERE post_views.fk_post_id = posts.pk_post_id " +
+		"AND post_views.created >= NOW() - INTERVAL 1 DAY " +
+		"GROUP BY post_views.fk_post_id " +
+		"ORDER BY views DESC " +
+		"LIMIT 250")
+	defer rows.Close()
+	trendingPosts := TrendingPosts{Posts: make([]TrendingPost, 0)}
+	for rows.Next() {
+		var trendingPost TrendingPost
+		var publishedDate string
+		rows.Scan(&trendingPost.PostId, &trendingPost.views, &publishedDate)
+		trendingPost.publishedDate, _ = time.Parse("2006-01-02 15:04:05", publishedDate)
+		trendingPosts.Posts = append(trendingPosts.Posts, trendingPost)
+	}
+	trendingPosts.algo()
+	c.IndentedJSON(http.StatusOK, trendingPosts)
 }
 
 func main() {
@@ -62,26 +67,20 @@ func main() {
 		os.Getenv("DB_HOST"),
 		os.Getenv("DB_NAME"),
 	)
-	db, err := sql.Open("mysql", dbConnectionString)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = db.Ping()
-	if err != nil {
-		log.Fatal(err)
-	}
+	db, _ := sql.Open("mysql", dbConnectionString)
+	_ = db.Ping()
 	fmt.Println("Connected!")
 	router := gin.Default()
 	apiV1 := router.Group("/v1")
-	apiV1.GET("/posts", GetPosts)
-	apiV1.GET("/post/:id", GetPostById)
+	apiV1.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+	apiV1.GET("/posts/trending", ApiV1TrendingPosts)
 	apiAddress := fmt.Sprintf(
 		"%s:%s",
 		os.Getenv("API_HOST"),
 		os.Getenv("API_PORT"),
 	)
-	err = router.Run(apiAddress)
-	if err != nil {
-		log.Fatal(err)
-	}
+	_ = router.Run(apiAddress)
 }
