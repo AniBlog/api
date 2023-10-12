@@ -7,6 +7,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"time"
@@ -20,7 +21,23 @@ type TrendingPost struct {
 	PostId        int64 `json:"post_id"`
 	views         int64
 	publishedDate time.Time
-	TrendingScore float64 `json:"score"`
+	TrendingScore float64
+}
+
+type Post struct {
+	PostId          int64
+	PostTitle       string
+	PostLink        string
+	PostDescription string
+	PostPubDate     string
+	PostImage       string
+	PostTags        []string
+	Site            Site
+}
+
+type Site struct {
+	SiteName string
+	SiteType string
 }
 
 func (receiver *TrendingPosts) algo() {
@@ -56,6 +73,15 @@ func ApiV1TrendingPosts(c *gin.Context) {
 		trendingPosts.Posts = append(trendingPosts.Posts, trendingPost)
 	}
 	trendingPosts.algo()
+	baseURL, _ := url.Parse("http://localhost:8983/solr/rss/select")
+	params := url.Values{}
+	params.Add("q", "value1")
+	params.Add("rows", "value2")
+	params.Add("start", "value2")
+	params.Add("fq", "value2")
+	baseURL.RawQuery = params.Encode()
+	resp, _ := http.Get(baseURL.String())
+	defer resp.Body.Close()
 	c.IndentedJSON(http.StatusOK, trendingPosts)
 }
 
