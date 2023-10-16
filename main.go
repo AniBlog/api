@@ -15,15 +15,9 @@ import (
 	"time"
 )
 
-type TrendingPosts struct {
-	Posts []TrendingPost
-}
-
 type TrendingPost struct {
-	PostId        string
-	Views         int64
-	PublishedDate time.Time
-	TrendingScore float64
+	PostId string
+	Views  int64
 }
 
 type ApiResponsePosts struct {
@@ -111,17 +105,23 @@ func (receiver *ApiResponsePosts) algo(trendingPostViews map[string]int64) {
 	})
 }
 
+func PruneStaleViews(db *sql.DB) {
+	db.Exec("DELETE FROM post_views WHERE created < NOW() - INTERVAL 1 DAY")
+}
+
 func ApiV1TrendingPosts(c *gin.Context) {
 	db, _ := c.MustGet("db").(*sql.DB)
+	PruneStaleViews(db)
+
 	solrAddress, _ := c.MustGet("solr").(string)
 	rows, _ := db.Query("SELECT post_views.fk_post_id, COUNT(*) as Views, posts.pub_date " +
 		"FROM post_views, posts " +
 		"WHERE post_views.fk_post_id = posts.pk_post_id " +
-		"AND post_views.created >= NOW() - INTERVAL 2 DAY " +
+		"AND post_views.created >= NOW() - INTERVAL 1 DAY " +
 		"AND posts.visible = 1 " +
 		"GROUP BY post_views.fk_post_id " +
 		"ORDER BY Views DESC " +
-		"LIMIT 5")
+		"LIMIT 100")
 	defer rows.Close()
 	trendingPostIds := make([]string, 0)
 	trendingPostViews := make(map[string]int64, 0)
@@ -129,7 +129,6 @@ func ApiV1TrendingPosts(c *gin.Context) {
 		var trendingPost TrendingPost
 		var publishedDate string
 		rows.Scan(&trendingPost.PostId, &trendingPost.Views, &publishedDate)
-		trendingPost.PublishedDate, _ = time.Parse("2006-01-02 15:04:05", publishedDate)
 		trendingPostIds = append(trendingPostIds, trendingPost.PostId)
 		trendingPostViews[trendingPost.PostId] = trendingPost.Views
 	}
