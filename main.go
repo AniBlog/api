@@ -32,11 +32,13 @@ type Post struct {
 	PostPubDate     time.Time `json:"post_pub_date"`
 	PostImage       string    `json:"post_image"`
 	PostTags        []string  `json:"post_tags"`
+	PostMedia       []string  `json:"post_media"`
 	trendingScore   float64
 	Site            Site `json:"site"`
 }
 
 type Site struct {
+	SiteId   int    `json:"site_id"`
 	SiteName string `json:"site_name"`
 	SiteType string `json:"site_type"`
 }
@@ -69,6 +71,7 @@ func (receiver *ApiResponsePosts) UnmarshalJSON(data []byte) error {
 				ViewCount           int       `json:"view_count"`
 				PostImage           string    `json:"post_image"`
 				PostTags            []string  `json:"post_tags"`
+				PostMedia           []string  `json:"post_media"`
 				Version             int64     `json:"_version_"`
 				PostPubDateSorter   time.Time `json:"post_pub_date_sorter"`
 			} `json:"docs"`
@@ -84,7 +87,9 @@ func (receiver *ApiResponsePosts) UnmarshalJSON(data []byte) error {
 			PostPubDate:     searchDoc.PostPubDateRangeUtc,
 			PostImage:       searchDoc.PostImage,
 			PostTags:        searchDoc.PostTags,
+			PostMedia:       searchDoc.PostMedia,
 			Site: Site{
+				SiteId:   searchDoc.SiteId,
 				SiteName: searchDoc.SiteName,
 				SiteType: searchDoc.SiteType,
 			},
@@ -93,8 +98,30 @@ func (receiver *ApiResponsePosts) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// The decay factor determines how rapidly a post's score decays over time. If you want to favor posts published in the last 7 days, you would choose a decay factor that makes the post's score significantly decrease after 7 days.
+// To find an appropriate decay factor, you can set up a simple equation. Let's call the decay factor \( d \). If you want the score to be half of its original value after 7 days, then:
+//
+// \[ d^7 = 0.5 \]
+//
+// Solving for \( d \) would give:
+//
+// \[ d = \sqrt[7]{0.5} \]
+//
+// To calculate this in Go:
+//
+// ```go
+// decayFactor := math.Pow(0.5, 1.0/7.0)
+// ```
+//
+// This would make the score of a post roughly half after 7 days.
+//
+// If you want a more aggressive decay (e.g., you want the score to be a third of its original value after 7 days), you'd use:
+//
+// \[ d = \sqrt[7]{0.33} \]
+//
+// Adjust the target fraction (0.5 in the first example, 0.33 in the second) to control how aggressively you want the score to decay over a 7-day period.
 func (receiver *ApiResponsePosts) algo(trendingPostViews map[string]int64) {
-	const decayFactor = 0.985
+	decayFactor := math.Pow(0.5, 1.0/7.0)
 	for i := range receiver.Posts {
 		postAgeInDays := float64(time.Now().Unix()-receiver.Posts[i].PostPubDate.Unix()) / (24 * 60 * 60)
 		multiplier := math.Pow(decayFactor, postAgeInDays)
@@ -103,10 +130,11 @@ func (receiver *ApiResponsePosts) algo(trendingPostViews map[string]int64) {
 	sort.Slice(receiver.Posts, func(i, j int) bool {
 		return receiver.Posts[j].trendingScore < receiver.Posts[i].trendingScore
 	})
+	//fixme get rid of posts with a trending score of 0
 }
 
 func PruneStaleViews(db *sql.DB) {
-	db.Exec("DELETE FROM post_views WHERE created < NOW() - INTERVAL 1 DAY")
+	db.Exec("DELETE FROM post_views WHERE created < NOW() - INTERVAL 7 DAY")
 }
 
 func ApiV1TrendingPosts(c *gin.Context) {
@@ -117,7 +145,7 @@ func ApiV1TrendingPosts(c *gin.Context) {
 	rows, _ := db.Query("SELECT post_views.fk_post_id, COUNT(*) as Views, posts.pub_date " +
 		"FROM post_views, posts " +
 		"WHERE post_views.fk_post_id = posts.pk_post_id " +
-		"AND post_views.created >= NOW() - INTERVAL 1 DAY " +
+		"AND post_views.created >= NOW() - INTERVAL 7 DAY " +
 		"AND posts.visible = 1 " +
 		"GROUP BY post_views.fk_post_id " +
 		"ORDER BY Views DESC " +
@@ -168,8 +196,7 @@ func main() {
 	})
 	apiV1.GET("/posts/trending", ApiV1TrendingPosts)
 	apiAddress := fmt.Sprintf(
-		"%s:%s",
-		os.Getenv("API_HOST"),
+		":%s",
 		os.Getenv("API_PORT"),
 	)
 	_ = router.Run(apiAddress)
