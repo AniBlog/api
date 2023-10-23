@@ -11,14 +11,10 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
-
-type TrendingPost struct {
-	PostId string
-	Views  int64
-}
 
 type ApiResponsePosts struct {
 	Posts []Post `json:"posts"`
@@ -37,49 +33,83 @@ type Post struct {
 	Site            Site `json:"site"`
 }
 
+type SolrHandler struct {
+	Address string
+}
+
+type SolrQuery struct {
+	Q     string
+	Rows  int
+	Start int
+	FQ    string
+	Sort  string
+}
+
+type SolrResponse struct {
+	ResponseHeader struct {
+		Status int `json:"status"`
+		QTime  int `json:"QTime"`
+		Params struct {
+			Q      string `json:"q"`
+			Indent string `json:"indent"`
+			QOp    string `json:"q.op"`
+			Fq     string `json:"fq"`
+		} `json:"params"`
+	} `json:"responseHeader"`
+	Response struct {
+		NumFound      int  `json:"numFound"`
+		Start         int  `json:"start"`
+		NumFoundExact bool `json:"numFoundExact"`
+		Docs          []struct {
+			PostTitle           string    `json:"post_title"`
+			PostPubDateRangeUtc time.Time `json:"post_pub_date_range_utc"`
+			SiteId              int       `json:"site_id"`
+			PostLink            string    `json:"post_link"`
+			PostDescription     string    `json:"post_description"`
+			SiteType            string    `json:"site_type"`
+			Id                  string    `json:"id"`
+			SiteName            string    `json:"site_name"`
+			ViewCount           int       `json:"view_count"`
+			PostImage           string    `json:"post_image"`
+			PostTags            []string  `json:"post_tags"`
+			PostMedia           []string  `json:"post_media"`
+			Version             int64     `json:"_version_"`
+			PostPubDateSorter   time.Time `json:"post_pub_date_sorter"`
+		} `json:"docs"`
+	} `json:"response"`
+}
+
 type Site struct {
 	SiteId   int    `json:"site_id"`
 	SiteName string `json:"site_name"`
 	SiteType string `json:"site_type"`
 }
 
-func (receiver *ApiResponsePosts) UnmarshalJSON(data []byte) error {
-	var SolrSearchResults struct {
-		ResponseHeader struct {
-			Status int `json:"status"`
-			QTime  int `json:"QTime"`
-			Params struct {
-				Q      string `json:"q"`
-				Indent string `json:"indent"`
-				QOp    string `json:"q.op"`
-				Fq     string `json:"fq"`
-			} `json:"params"`
-		} `json:"responseHeader"`
-		Response struct {
-			NumFound      int  `json:"numFound"`
-			Start         int  `json:"start"`
-			NumFoundExact bool `json:"numFoundExact"`
-			Docs          []struct {
-				PostTitle           string    `json:"post_title"`
-				PostPubDateRangeUtc time.Time `json:"post_pub_date_range_utc"`
-				SiteId              int       `json:"site_id"`
-				PostLink            string    `json:"post_link"`
-				PostDescription     string    `json:"post_description"`
-				SiteType            string    `json:"site_type"`
-				Id                  string    `json:"id"`
-				SiteName            string    `json:"site_name"`
-				ViewCount           int       `json:"view_count"`
-				PostImage           string    `json:"post_image"`
-				PostTags            []string  `json:"post_tags"`
-				PostMedia           []string  `json:"post_media"`
-				Version             int64     `json:"_version_"`
-				PostPubDateSorter   time.Time `json:"post_pub_date_sorter"`
-			} `json:"docs"`
-		} `json:"response"`
+func (receiver *SolrHandler) request(query *SolrQuery) ([]Post, error) {
+	baseURL, _ := url.Parse(fmt.Sprintf("%s/solr/rss/select", receiver.Address))
+	params := url.Values{}
+	if query.Q != "" {
+		params.Add("q", query.Q)
+	} else {
+		params.Add("q", "*")
 	}
-	json.Unmarshal(data, &SolrSearchResults)
-	for _, searchDoc := range SolrSearchResults.Response.Docs {
-		receiver.Posts = append(receiver.Posts, Post{
+	if query.FQ != "" {
+		params.Add("fq", query.FQ)
+	}
+	if query.Sort != "" {
+		params.Add("sort", query.Sort)
+	}
+	params.Add("rows", fmt.Sprintf("%d", query.Rows))
+	params.Add("start", fmt.Sprintf("%d", query.Start))
+	baseURL.RawQuery = params.Encode()
+	resp, _ := http.Get(baseURL.String())
+	defer resp.Body.Close()
+	var solrResponseInstance SolrResponse
+	decoder := json.NewDecoder(resp.Body)
+	decoder.Decode(&solrResponseInstance)
+	posts := make([]Post, 0)
+	for _, searchDoc := range solrResponseInstance.Response.Docs {
+		posts = append(posts, Post{
 			PostId:          searchDoc.Id,
 			PostTitle:       searchDoc.PostTitle,
 			PostLink:        searchDoc.PostLink,
@@ -95,7 +125,7 @@ func (receiver *ApiResponsePosts) UnmarshalJSON(data []byte) error {
 			},
 		})
 	}
-	return nil
+	return posts, nil
 }
 
 // The decay factor determines how rapidly a post's score decays over time. If you want to favor posts published in the last 7 days, you would choose a decay factor that makes the post's score significantly decrease after 7 days.
@@ -140,8 +170,7 @@ func PruneStaleViews(db *sql.DB) {
 func ApiV1TrendingPosts(c *gin.Context) {
 	db, _ := c.MustGet("db").(*sql.DB)
 	PruneStaleViews(db)
-
-	solrAddress, _ := c.MustGet("solr").(string)
+	solr, _ := c.MustGet("solr").(SolrHandler)
 	rows, _ := db.Query("SELECT post_views.fk_post_id, COUNT(*) as Views, posts.pub_date " +
 		"FROM post_views, posts " +
 		"WHERE post_views.fk_post_id = posts.pk_post_id " +
@@ -152,27 +181,40 @@ func ApiV1TrendingPosts(c *gin.Context) {
 		"LIMIT 100")
 	defer rows.Close()
 	trendingPostIds := make([]string, 0)
-	trendingPostViews := make(map[string]int64, 0)
+	trendingPostViews := make(map[string]int64)
 	for rows.Next() {
-		var trendingPost TrendingPost
+		var postId string
+		var postViews int64
 		var publishedDate string
-		rows.Scan(&trendingPost.PostId, &trendingPost.Views, &publishedDate)
-		trendingPostIds = append(trendingPostIds, trendingPost.PostId)
-		trendingPostViews[trendingPost.PostId] = trendingPost.Views
+		rows.Scan(&postId, &postViews, &publishedDate)
+		trendingPostIds = append(trendingPostIds, postId)
+		trendingPostViews[postId] = postViews
 	}
-	baseURL, _ := url.Parse(fmt.Sprintf("%s/solr/rss/select", solrAddress))
-	params := url.Values{}
-	params.Add("q", "*")
-	params.Add("rows", "100")
-	params.Add("start", "0")
-	params.Add("fq", fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")))
-	baseURL.RawQuery = params.Encode()
-	resp, _ := http.Get(baseURL.String())
-	defer resp.Body.Close()
+	var solrQuery = SolrQuery{
+		Q:     "",
+		Rows:  100,
+		Start: 0,
+		FQ:    fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")),
+	}
 	var apiResponse ApiResponsePosts
-	decoder := json.NewDecoder(resp.Body)
-	decoder.Decode(&apiResponse)
+	apiResponse.Posts, _ = solr.request(&solrQuery)
 	apiResponse.algo(trendingPostViews)
+	c.IndentedJSON(http.StatusOK, apiResponse)
+}
+
+func ApiV1LatestPosts(c *gin.Context) {
+	start, hasStart := c.GetQuery("start")
+	solr, _ := c.MustGet("solr").(SolrHandler)
+	var solrQuery = SolrQuery{
+		Rows: 100,
+		Sort: "post_pub_date_sorter desc",
+	}
+	if hasStart {
+		start, _ := strconv.Atoi(start)
+		solrQuery.Start = start
+	}
+	var apiResponse ApiResponsePosts
+	apiResponse.Posts, _ = solr.request(&solrQuery)
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
@@ -191,10 +233,11 @@ func main() {
 	apiV1 := router.Group("/v1")
 	apiV1.Use(func(c *gin.Context) {
 		c.Set("db", db)
-		c.Set("solr", os.Getenv("SOLR_ADDRESS"))
+		c.Set("solr", SolrHandler{Address: os.Getenv("SOLR_ADDRESS")})
 		c.Next()
 	})
 	apiV1.GET("/posts/trending", ApiV1TrendingPosts)
+	apiV1.GET("/posts/latest", ApiV1LatestPosts)
 	apiAddress := fmt.Sprintf(
 		":%s",
 		os.Getenv("API_PORT"),
