@@ -24,6 +24,7 @@ type ApiResponsePosts struct {
 type Pagination struct {
 	NumFound int `json:"ttl"`
 	Start    int `json:"start"`
+	Rows     int `json:"rows"`
 }
 
 type Post struct {
@@ -205,6 +206,7 @@ func ApiV1TrendingPosts(c *gin.Context) {
 	}
 	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
 	apiResponse.Pagination.Start = solrResponse.Response.Start
+	apiResponse.Pagination.Rows = 100
 	apiResponse.algo(trendingPostViews)
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
@@ -241,6 +243,7 @@ func ApiV1LatestPosts(c *gin.Context) {
 	}
 	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
 	apiResponse.Pagination.Start = solrResponse.Response.Start
+	apiResponse.Pagination.Rows = 100
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
