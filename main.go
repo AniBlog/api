@@ -17,7 +17,13 @@ import (
 )
 
 type ApiResponsePosts struct {
-	Posts []Post `json:"posts"`
+	Posts      []Post     `json:"posts"`
+	Pagination Pagination `json:"pagination"`
+}
+
+type Pagination struct {
+	NumFound int `json:"ttl"`
+	Start    int `json:"start"`
 }
 
 type Post struct {
@@ -85,7 +91,7 @@ type Site struct {
 	SiteType string `json:"site_type"`
 }
 
-func (receiver *SolrHandler) request(query *SolrQuery) ([]Post, error) {
+func (receiver *SolrHandler) request(query *SolrQuery) (SolrResponse, error) {
 	baseURL, _ := url.Parse(fmt.Sprintf("%s/solr/rss/select", receiver.Address))
 	params := url.Values{}
 	if query.Q != "" {
@@ -107,25 +113,7 @@ func (receiver *SolrHandler) request(query *SolrQuery) ([]Post, error) {
 	var solrResponseInstance SolrResponse
 	decoder := json.NewDecoder(resp.Body)
 	decoder.Decode(&solrResponseInstance)
-	posts := make([]Post, 0)
-	for _, searchDoc := range solrResponseInstance.Response.Docs {
-		posts = append(posts, Post{
-			PostId:          searchDoc.Id,
-			PostTitle:       searchDoc.PostTitle,
-			PostLink:        searchDoc.PostLink,
-			PostDescription: searchDoc.PostDescription,
-			PostPubDate:     searchDoc.PostPubDateRangeUtc,
-			PostImage:       searchDoc.PostImage,
-			PostTags:        searchDoc.PostTags,
-			PostMedia:       searchDoc.PostMedia,
-			Site: Site{
-				SiteId:   searchDoc.SiteId,
-				SiteName: searchDoc.SiteName,
-				SiteType: searchDoc.SiteType,
-			},
-		})
-	}
-	return posts, nil
+	return solrResponseInstance, nil
 }
 
 // The decay factor determines how rapidly a post's score decays over time. If you want to favor posts published in the last 7 days, you would choose a decay factor that makes the post's score significantly decrease after 7 days.
@@ -196,8 +184,27 @@ func ApiV1TrendingPosts(c *gin.Context) {
 		Start: 0,
 		FQ:    fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")),
 	}
+	solrResponse, _ := solr.request(&solrQuery)
 	var apiResponse ApiResponsePosts
-	apiResponse.Posts, _ = solr.request(&solrQuery)
+	for _, searchDoc := range solrResponse.Response.Docs {
+		apiResponse.Posts = append(apiResponse.Posts, Post{
+			PostId:          searchDoc.Id,
+			PostTitle:       searchDoc.PostTitle,
+			PostLink:        searchDoc.PostLink,
+			PostDescription: searchDoc.PostDescription,
+			PostPubDate:     searchDoc.PostPubDateRangeUtc,
+			PostImage:       searchDoc.PostImage,
+			PostTags:        searchDoc.PostTags,
+			PostMedia:       searchDoc.PostMedia,
+			Site: Site{
+				SiteId:   searchDoc.SiteId,
+				SiteName: searchDoc.SiteName,
+				SiteType: searchDoc.SiteType,
+			},
+		})
+	}
+	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
+	apiResponse.Pagination.Start = solrResponse.Response.Start
 	apiResponse.algo(trendingPostViews)
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
@@ -213,8 +220,27 @@ func ApiV1LatestPosts(c *gin.Context) {
 		start, _ := strconv.Atoi(start)
 		solrQuery.Start = start
 	}
+	solrResponse, _ := solr.request(&solrQuery)
 	var apiResponse ApiResponsePosts
-	apiResponse.Posts, _ = solr.request(&solrQuery)
+	for _, searchDoc := range solrResponse.Response.Docs {
+		apiResponse.Posts = append(apiResponse.Posts, Post{
+			PostId:          searchDoc.Id,
+			PostTitle:       searchDoc.PostTitle,
+			PostLink:        searchDoc.PostLink,
+			PostDescription: searchDoc.PostDescription,
+			PostPubDate:     searchDoc.PostPubDateRangeUtc,
+			PostImage:       searchDoc.PostImage,
+			PostTags:        searchDoc.PostTags,
+			PostMedia:       searchDoc.PostMedia,
+			Site: Site{
+				SiteId:   searchDoc.SiteId,
+				SiteName: searchDoc.SiteName,
+				SiteType: searchDoc.SiteType,
+			},
+		})
+	}
+	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
+	apiResponse.Pagination.Start = solrResponse.Response.Start
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
