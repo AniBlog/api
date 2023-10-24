@@ -92,9 +92,37 @@ type Site struct {
 	SiteType string `json:"site_type"`
 }
 
+func NewApiResponse(solrResponse SolrResponse) ApiResponsePosts {
+	var apiResponse ApiResponsePosts
+	for _, searchDoc := range solrResponse.Response.Docs {
+		apiResponse.Posts = append(apiResponse.Posts, Post{
+			PostId:          searchDoc.Id,
+			PostTitle:       searchDoc.PostTitle,
+			PostLink:        searchDoc.PostLink,
+			PostDescription: searchDoc.PostDescription,
+			PostPubDate:     searchDoc.PostPubDateRangeUtc,
+			PostImage:       searchDoc.PostImage,
+			PostTags:        searchDoc.PostTags,
+			PostMedia:       searchDoc.PostMedia,
+			Site: Site{
+				SiteId:   searchDoc.SiteId,
+				SiteName: searchDoc.SiteName,
+				SiteType: searchDoc.SiteType,
+			},
+		})
+	}
+	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
+	apiResponse.Pagination.Start = solrResponse.Response.Start
+	apiResponse.Pagination.Rows = 100
+	return apiResponse
+}
+
 func (receiver *SolrHandler) request(query *SolrQuery) (SolrResponse, error) {
 	baseURL, _ := url.Parse(fmt.Sprintf("%s/solr/rss/select", receiver.Address))
 	params := url.Values{}
+	if query.Rows == 0 {
+		query.Rows = 100
+	}
 	if query.Q != "" {
 		params.Add("q", query.Q)
 	} else {
@@ -180,33 +208,10 @@ func ApiV1TrendingPosts(c *gin.Context) {
 		trendingPostViews[postId] = postViews
 	}
 	var solrQuery = SolrQuery{
-		Q:     "",
-		Rows:  100,
-		Start: 0,
-		FQ:    fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")),
+		FQ: fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")),
 	}
 	solrResponse, _ := solr.request(&solrQuery)
-	var apiResponse ApiResponsePosts
-	for _, searchDoc := range solrResponse.Response.Docs {
-		apiResponse.Posts = append(apiResponse.Posts, Post{
-			PostId:          searchDoc.Id,
-			PostTitle:       searchDoc.PostTitle,
-			PostLink:        searchDoc.PostLink,
-			PostDescription: searchDoc.PostDescription,
-			PostPubDate:     searchDoc.PostPubDateRangeUtc,
-			PostImage:       searchDoc.PostImage,
-			PostTags:        searchDoc.PostTags,
-			PostMedia:       searchDoc.PostMedia,
-			Site: Site{
-				SiteId:   searchDoc.SiteId,
-				SiteName: searchDoc.SiteName,
-				SiteType: searchDoc.SiteType,
-			},
-		})
-	}
-	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
-	apiResponse.Pagination.Start = solrResponse.Response.Start
-	apiResponse.Pagination.Rows = 100
+	apiResponse := NewApiResponse(solrResponse)
 	apiResponse.algo(trendingPostViews)
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
@@ -215,7 +220,6 @@ func ApiV1LatestPosts(c *gin.Context) {
 	start, hasStart := c.GetQuery("start")
 	solr, _ := c.MustGet("solr").(SolrHandler)
 	var solrQuery = SolrQuery{
-		Rows: 100,
 		Sort: "post_pub_date_sorter desc",
 	}
 	if hasStart {
@@ -223,27 +227,7 @@ func ApiV1LatestPosts(c *gin.Context) {
 		solrQuery.Start = start
 	}
 	solrResponse, _ := solr.request(&solrQuery)
-	var apiResponse ApiResponsePosts
-	for _, searchDoc := range solrResponse.Response.Docs {
-		apiResponse.Posts = append(apiResponse.Posts, Post{
-			PostId:          searchDoc.Id,
-			PostTitle:       searchDoc.PostTitle,
-			PostLink:        searchDoc.PostLink,
-			PostDescription: searchDoc.PostDescription,
-			PostPubDate:     searchDoc.PostPubDateRangeUtc,
-			PostImage:       searchDoc.PostImage,
-			PostTags:        searchDoc.PostTags,
-			PostMedia:       searchDoc.PostMedia,
-			Site: Site{
-				SiteId:   searchDoc.SiteId,
-				SiteName: searchDoc.SiteName,
-				SiteType: searchDoc.SiteType,
-			},
-		})
-	}
-	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
-	apiResponse.Pagination.Start = solrResponse.Response.Start
-	apiResponse.Pagination.Rows = 100
+	apiResponse := NewApiResponse(solrResponse)
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
