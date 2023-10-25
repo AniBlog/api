@@ -45,9 +45,9 @@ type SolrHandler struct {
 }
 
 type SolrQuery struct {
-	Q     string
-	Rows  int
-	Start int
+	Q     string `default:"*"`
+	Rows  int    `default:"100"`
+	Start int    `default:"0"`
 	FQ    string
 	Sort  string
 }
@@ -90,31 +90,6 @@ type Site struct {
 	SiteId   int    `json:"site_id"`
 	SiteName string `json:"site_name"`
 	SiteType string `json:"site_type"`
-}
-
-func NewApiResponse(solrResponse SolrResponse) ApiResponsePosts {
-	var apiResponse ApiResponsePosts
-	for _, searchDoc := range solrResponse.Response.Docs {
-		apiResponse.Posts = append(apiResponse.Posts, Post{
-			PostId:          searchDoc.Id,
-			PostTitle:       searchDoc.PostTitle,
-			PostLink:        searchDoc.PostLink,
-			PostDescription: searchDoc.PostDescription,
-			PostPubDate:     searchDoc.PostPubDateRangeUtc,
-			PostImage:       searchDoc.PostImage,
-			PostTags:        searchDoc.PostTags,
-			PostMedia:       searchDoc.PostMedia,
-			Site: Site{
-				SiteId:   searchDoc.SiteId,
-				SiteName: searchDoc.SiteName,
-				SiteType: searchDoc.SiteType,
-			},
-		})
-	}
-	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
-	apiResponse.Pagination.Start = solrResponse.Response.Start
-	apiResponse.Pagination.Rows = 100
-	return apiResponse
 }
 
 func (receiver *SolrHandler) request(query *SolrQuery) (SolrResponse, error) {
@@ -180,10 +155,6 @@ func (receiver *ApiResponsePosts) algo(trendingPostViews map[string]int64) {
 	//fixme get rid of posts with a trending score of 0
 }
 
-func PruneStaleViews(db *sql.DB) {
-	db.Exec("DELETE FROM post_views WHERE created < NOW() - INTERVAL 7 DAY")
-}
-
 func ApiV1TrendingPosts(c *gin.Context) {
 	db, _ := c.MustGet("db").(*sql.DB)
 	PruneStaleViews(db)
@@ -231,6 +202,61 @@ func ApiV1LatestPosts(c *gin.Context) {
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
+func ApiV1SearchPosts(c *gin.Context) {
+	var solrQuery SolrQuery
+
+	query, hasQuery := c.GetQuery("query")
+	if hasQuery {
+		solrQuery.Q = query
+	}
+
+	start, hasStart := c.GetQuery("start")
+	if hasStart {
+		start, _ := strconv.Atoi(start)
+		solrQuery.Start = start
+	}
+
+	sorter, hasSorter := c.GetQuery("sorter")
+	if hasSorter {
+		solrQuery.Sort = sorter
+	}
+
+	solr, _ := c.MustGet("solr").(SolrHandler)
+
+	solrResponse, _ := solr.request(&solrQuery)
+	apiResponse := NewApiResponse(solrResponse)
+	c.IndentedJSON(http.StatusOK, apiResponse)
+}
+
+func NewApiResponse(solrResponse SolrResponse) ApiResponsePosts {
+	var apiResponse ApiResponsePosts
+	for _, searchDoc := range solrResponse.Response.Docs {
+		apiResponse.Posts = append(apiResponse.Posts, Post{
+			PostId:          searchDoc.Id,
+			PostTitle:       searchDoc.PostTitle,
+			PostLink:        searchDoc.PostLink,
+			PostDescription: searchDoc.PostDescription,
+			PostPubDate:     searchDoc.PostPubDateRangeUtc,
+			PostImage:       searchDoc.PostImage,
+			PostTags:        searchDoc.PostTags,
+			PostMedia:       searchDoc.PostMedia,
+			Site: Site{
+				SiteId:   searchDoc.SiteId,
+				SiteName: searchDoc.SiteName,
+				SiteType: searchDoc.SiteType,
+			},
+		})
+	}
+	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
+	apiResponse.Pagination.Start = solrResponse.Response.Start
+	apiResponse.Pagination.Rows = 100
+	return apiResponse
+}
+
+func PruneStaleViews(db *sql.DB) {
+	db.Exec("DELETE FROM post_views WHERE created < NOW() - INTERVAL 7 DAY")
+}
+
 func main() {
 	dbConnectionString := fmt.Sprintf(
 		"%s:%s@tcp(%s)/%s?charset=utf8mb4,utf8",
@@ -251,6 +277,7 @@ func main() {
 	})
 	apiV1.GET("/posts/trending", ApiV1TrendingPosts)
 	apiV1.GET("/posts/latest", ApiV1LatestPosts)
+	apiV1.GET("/posts/search", ApiV1SearchPosts)
 	apiAddress := fmt.Sprintf(
 		":%s",
 		os.Getenv("API_PORT"),
