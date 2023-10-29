@@ -46,7 +46,7 @@ type SolrHandler struct {
 
 type SolrQuery struct {
 	Q     string `default:"*"`
-	Rows  int    `default:"100"`
+	Rows  int    `default:"50"`
 	Start int    `default:"0"`
 	FQ    string
 	Sort  string
@@ -93,10 +93,15 @@ type Site struct {
 }
 
 func (receiver *SolrHandler) request(query *SolrQuery) (SolrResponse, error) {
-	baseURL, _ := url.Parse(fmt.Sprintf("%s/solr/rss/select", receiver.Address))
+	var solrResponseInstance SolrResponse
+	baseURL, err := url.Parse(fmt.Sprintf("%s/solr/rss/select", receiver.Address))
+	if err != nil {
+		return solrResponseInstance, err
+	}
+
 	params := url.Values{}
 	if query.Rows == 0 {
-		query.Rows = 100
+		query.Rows = 50
 	}
 	if query.Q != "" {
 		params.Add("q", query.Q)
@@ -112,9 +117,12 @@ func (receiver *SolrHandler) request(query *SolrQuery) (SolrResponse, error) {
 	params.Add("rows", fmt.Sprintf("%d", query.Rows))
 	params.Add("start", fmt.Sprintf("%d", query.Start))
 	baseURL.RawQuery = params.Encode()
-	resp, _ := http.Get(baseURL.String())
+	resp, err := http.Get(baseURL.String())
+	if err != nil {
+		return solrResponseInstance, err
+	}
+
 	defer resp.Body.Close()
-	var solrResponseInstance SolrResponse
 	decoder := json.NewDecoder(resp.Body)
 	decoder.Decode(&solrResponseInstance)
 	return solrResponseInstance, nil
@@ -166,7 +174,7 @@ func ApiV1TrendingPosts(c *gin.Context) {
 		"AND posts.visible = 1 " +
 		"GROUP BY post_views.fk_post_id " +
 		"ORDER BY Views DESC " +
-		"LIMIT 100")
+		"LIMIT 50")
 	defer rows.Close()
 	trendingPostIds := make([]string, 0)
 	trendingPostViews := make(map[string]int64)
@@ -223,7 +231,11 @@ func ApiV1SearchPosts(c *gin.Context) {
 
 	solr, _ := c.MustGet("solr").(SolrHandler)
 
-	solrResponse, _ := solr.request(&solrQuery)
+	solrResponse, err := solr.request(&solrQuery)
+	if err != nil {
+		c.AbortWithStatus(http.StatusBadRequest)
+	}
+
 	apiResponse := NewApiResponse(solrResponse)
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
@@ -249,7 +261,7 @@ func NewApiResponse(solrResponse SolrResponse) ApiResponsePosts {
 	}
 	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
 	apiResponse.Pagination.Start = solrResponse.Response.Start
-	apiResponse.Pagination.Rows = 100
+	apiResponse.Pagination.Rows = 50
 	return apiResponse
 }
 
