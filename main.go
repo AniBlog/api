@@ -151,7 +151,7 @@ func (receiver *SolrHandler) request(query *SolrQuery) (SolrResponse, error) {
 //
 // Adjust the target fraction (0.5 in the first example, 0.33 in the second) to control how aggressively you want the score to decay over a 7-day period.
 func (receiver *ApiResponsePosts) algo(trendingPostViews map[string]int64) {
-	decayFactor := math.Pow(0.5, 1.0/7.0)
+	decayFactor := math.Pow(0.33, 1.0/7.0)
 	for i := range receiver.Posts {
 		postAgeInDays := float64(time.Now().Unix()-receiver.Posts[i].PostPubDate.Unix()) / (24 * 60 * 60)
 		multiplier := math.Pow(decayFactor, postAgeInDays)
@@ -161,38 +161,6 @@ func (receiver *ApiResponsePosts) algo(trendingPostViews map[string]int64) {
 		return receiver.Posts[j].trendingScore < receiver.Posts[i].trendingScore
 	})
 	//fixme get rid of posts with a trending score of 0
-}
-
-func ApiV1TrendingPosts(c *gin.Context) {
-	db, _ := c.MustGet("db").(*sql.DB)
-	PruneStaleViews(db)
-	solr, _ := c.MustGet("solr").(SolrHandler)
-	rows, _ := db.Query("SELECT post_views.fk_post_id, COUNT(*) as Views, posts.pub_date " +
-		"FROM post_views, posts " +
-		"WHERE post_views.fk_post_id = posts.pk_post_id " +
-		"AND post_views.created >= NOW() - INTERVAL 7 DAY " +
-		"AND posts.visible = 1 " +
-		"GROUP BY post_views.fk_post_id " +
-		"ORDER BY Views DESC " +
-		"LIMIT 50")
-	defer rows.Close()
-	trendingPostIds := make([]string, 0)
-	trendingPostViews := make(map[string]int64)
-	for rows.Next() {
-		var postId string
-		var postViews int64
-		var publishedDate string
-		rows.Scan(&postId, &postViews, &publishedDate)
-		trendingPostIds = append(trendingPostIds, postId)
-		trendingPostViews[postId] = postViews
-	}
-	var solrQuery = SolrQuery{
-		FQ: fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")),
-	}
-	solrResponse, _ := solr.request(&solrQuery)
-	apiResponse := NewApiResponse(solrResponse)
-	apiResponse.algo(trendingPostViews)
-	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
 func ApiV1LatestPosts(c *gin.Context) {
@@ -240,6 +208,39 @@ func ApiV1SearchPosts(c *gin.Context) {
 	c.IndentedJSON(http.StatusOK, apiResponse)
 }
 
+func ApiV1TrendingPosts(c *gin.Context) {
+	db, _ := c.MustGet("db").(*sql.DB)
+	PruneStaleViews(db)
+	solr, _ := c.MustGet("solr").(SolrHandler)
+	rows, _ := db.Query("SELECT fk_post_id, COUNT(*) as views, pub_date " +
+		"FROM post_views, posts " +
+		"WHERE post_views.fk_post_id = posts.pk_post_id " +
+		"AND post_views.created >= NOW() - INTERVAL 7 DAY " +
+		"AND posts.pub_date >= NOW() - INTERVAL 14 DAY " +
+		"GROUP BY fk_post_id " +
+		"ORDER BY views DESC " +
+		"LIMIT 250")
+	defer rows.Close()
+	trendingPostIds := make([]string, 0)
+	trendingPostViews := make(map[string]int64)
+	for rows.Next() {
+		var postId string
+		var postViews int64
+		var publishedDate string
+		rows.Scan(&postId, &postViews, &publishedDate)
+		trendingPostIds = append(trendingPostIds, postId)
+		trendingPostViews[postId] = postViews
+	}
+	var solrQuery = SolrQuery{
+		FQ:   fmt.Sprintf("id:(%s)", strings.Join(trendingPostIds, " ")),
+		Rows: 250,
+	}
+	solrResponse, _ := solr.request(&solrQuery)
+	apiResponse := NewApiResponse(solrResponse)
+	apiResponse.algo(trendingPostViews)
+	c.IndentedJSON(http.StatusOK, apiResponse)
+}
+
 func NewApiResponse(solrResponse SolrResponse) ApiResponsePosts {
 	var apiResponse ApiResponsePosts
 	for _, searchDoc := range solrResponse.Response.Docs {
@@ -261,7 +262,7 @@ func NewApiResponse(solrResponse SolrResponse) ApiResponsePosts {
 	}
 	apiResponse.Pagination.NumFound = solrResponse.Response.NumFound
 	apiResponse.Pagination.Start = solrResponse.Response.Start
-	apiResponse.Pagination.Rows = 50
+	apiResponse.Pagination.Rows = len(solrResponse.Response.Docs)
 	return apiResponse
 }
 
